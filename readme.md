@@ -15,6 +15,8 @@ You can pass a directory path to `ft` in order to output the files in that direc
 
 ![a terminal running the ft command with an argument directory_2, which outputs the contents of the directory_2 folder](./assets/ft_args_example.png "using ft with arguments")
 
+Adding the `-a` flag to either of the above commands prints out the dotfiles in the directory as well.
+
 TODO:
  - improve printing so that your screen size is used to have multiple columns
- - add 'ls -a' functionality where dotfiles are shown as well.
+ - (COMPLETE) add 'ft -a' functionality where dotfiles are shown as well.

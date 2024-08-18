@@ -80,6 +80,50 @@ int file_filter(const struct dirent* d)
 }
 
 /**
+ * function passed into dirent.h's scandir do filter for
+ * only hidden files.
+ */
+int hidden_file_filter(const struct dirent* d)
+{
+    if (d->d_type != DT_REG) {
+        return 0;
+    }
+
+    // dont accept if the first char isn't a dot.
+    if (d->d_name[0] != '.') {
+        return 0;
+    }
+
+    if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/**
+ * function passed into dirent.h's scandir do filter for
+ * only hidden folders.
+ */
+int hidden_dir_filter(const struct dirent* d)
+{
+    if (d->d_type != DT_DIR) {
+        return 0;
+    }
+
+    // dont accept if the first char isn't a dot.
+    if (d->d_name[0] != '.') {
+        return 0;
+    }
+
+    if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/**
  * get_directory_contents takes a directory name and an int*. This function
  * attempts to open the directory and stores the size of its contents in
  * the int* n variable. The program crashes if we can't scan the directory.
@@ -104,6 +148,31 @@ struct dirent** get_files(char* dirname, int* n)
     if (*n == -1) {
         log_fatal("couldn't scan directory '%s'", dirname);
     }
+
+    return contents;
+}
+
+struct dirent** get_hidden_files(char* dirname, int* n)
+{
+    struct dirent** contents;
+
+    *n = scandir(dirname, &contents, hidden_file_filter, alphasort);
+    if (*n == -1) {
+        log_fatal("couldn't scan directory '%s'", dirname);
+    }
+
+    return contents;
+}
+
+struct dirent** get_hidden_dirs(char* dirname, int* n)
+{
+    struct dirent** contents;
+
+    *n = scandir(dirname, &contents, hidden_dir_filter, alphasort);
+    if (*n == -1) {
+        log_fatal("couldn't scan directory '%s'", dirname);
+    }
+
     return contents;
 }
 
@@ -137,13 +206,19 @@ long long get_file_size(struct dirent* dir)
 const char* DIR_COLOR = ANSI_CYAN;
 const char* FILE_COLOR = ANSI_GREEN;
 const char* EXEC_COLOR = ANSI_MAGENTA;
+const char* HIDDEN_FILE_COLOR = ANSI_RED;
+const char* HIDDEN_DIR_COLOR = ANSI_BLUE;
 const char* FILE_SIZE_COLOR = ANSI_WHITE;
 
 struct dir_item {
     struct dirent** dirs;
     struct dirent** files;
+    struct dirent** hidden_dirs;
+    struct dirent** hidden_files;
     size_t          dirs_len;
     size_t          files_len;
+    size_t          hidden_dirs_len;
+    size_t          hidden_files_len;
 };
 
 /**
@@ -153,11 +228,15 @@ struct dir_item {
 struct dir_item new_dir_item(char* path)
 {
     struct dir_item di;
-    int             n, m;
+    int             n, m, p, q;
     di.dirs = get_subdirectories(path, &n);
     di.dirs_len = (size_t)n;
     di.files = get_files(path, &m);
     di.files_len = (size_t)m;
+    di.hidden_dirs = get_hidden_dirs(path, &p);
+    di.hidden_dirs_len = (size_t)p;
+    di.hidden_files = get_hidden_files(path, &q);
+    di.hidden_files_len = q;
     return di;
 }
 /*** output ***/
@@ -167,11 +246,33 @@ typedef struct file_table {
     char**            dir_sizes;
 } file_table;
 
-size_t longest_filename(struct dir_item di)
+size_t longest_filename(struct dir_item di, bool show_hidden)
 {
     size_t longest = 1;
     size_t cur;
     int    i;
+
+    if (show_hidden) {
+        // iterate through hidden dirs
+        for (i = 0; i < di.hidden_dirs_len; i++) {
+            struct dirent* d = di.hidden_dirs[i];
+            cur = strlen(d->d_name);
+            if (cur > longest) {
+                longest = cur;
+            }
+            cur = 0;
+        }
+
+        // iterate through hidden files
+        for (i = 0; i < di.hidden_files_len; i++) {
+            struct dirent* d = di.hidden_files[i];
+            cur = strlen(d->d_name);
+            if (cur > longest) {
+                longest = cur;
+            }
+            cur = 0;
+        }
+    }
 
     // iterate through dirs
     for (i = 0; i < di.dirs_len; i++) {
@@ -234,11 +335,36 @@ void ch_pad(char c, int n)
  * And then prints out any other file with a custom icon depending
  * on its type.
  */
-void print_directory_contents(struct dir_item di)
+void print_directory_contents(struct dir_item di, bool show_hidden)
 {
-    size_t longest = longest_filename(di);
+    size_t longest = longest_filename(di, show_hidden);
     int    i, j;
 
+    if (show_hidden) {
+        // print hidden directories
+        for (i = 0; i < di.hidden_dirs_len; i++) {
+            struct dirent* d = di.hidden_dirs[i];
+            size_t         name_len = strlen(d->d_name);
+            char*          sz = readable_file_size(get_file_size(d));
+            printf(ANSI_BOLD);
+            color_print(HIDDEN_DIR_COLOR, "\u25B9 %s", d->d_name);
+            if (name_len < longest) {
+                ch_pad(' ', longest - name_len);
+            }
+            puts(sz);
+        }
+        // print hidden files
+        for (i = 0; i < di.hidden_files_len; i++) {
+            struct dirent* d = di.hidden_files[i];
+            size_t         name_len = strlen(d->d_name);
+            char*          sz = readable_file_size(get_file_size(d));
+            color_print(HIDDEN_FILE_COLOR, "\u25AA %s", d->d_name);
+            if (name_len < longest) {
+                ch_pad(' ', longest - name_len);
+            }
+            puts(sz);
+        }
+    }
     // print subdirectories
     for (i = 0; i < di.dirs_len; i++) {
         struct dirent* d = di.dirs[i];
@@ -275,6 +401,19 @@ void print_directory_contents(struct dir_item di)
     printf(ANSI_RESET_BOLD);
 }
 
+/*** helpers ***/
+
+bool isArg(int argc, char** argv, char* target)
+{
+    int i;
+    for (i = 0; i < argc; i++) {
+        if (strcmp(argv[i], target) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /*** init ***/
 
 static bool DEBUG = false;
@@ -300,18 +439,43 @@ int main(int argc, char** argv)
     }
 
     struct dir_item di;
-    char*           fpath;
+    char*           fpath = "null";
+    bool            show_hidden = false;
     switch (argc) {
     case 1:
         di = new_dir_item(cwd);
         break;
     case 2:
-        fpath = get_filepath(argv[1]);
+        if (isArg(argc, argv, "-a")) {
+            di = new_dir_item(cwd);
+            show_hidden = true;
+        } else {
+            fpath = get_filepath(argv[1]);
+            chdir(fpath);
+            di = new_dir_item(fpath);
+        }
+        break;
+    case 3:
+        if (!isArg(argc, argv, "-a")) {
+            log_fatal("unexpected arguments.");
+        }
+
+        int i, idx;
+        for (i = 0; i < argc; i++) {
+            if (strcmp("-a", argv[i]) == 0) {
+                idx = i;
+            }
+        }
+
+        idx = idx == 1 ? 2 : 1;
+        fpath = get_filepath(argv[idx]);
+
         chdir(fpath);
         di = new_dir_item(fpath);
-        break;
+        show_hidden = true;
     }
-    print_directory_contents(di);
+
+    print_directory_contents(di, show_hidden);
     chdir(cwd);
 
     return 0;
